@@ -179,6 +179,9 @@
   .date-nav { display: flex; align-items: center; gap: 8px; }
   .date-nav input[type="date"] { flex: 1; min-width: 0; }
   .date-nav .action-btn { flex-shrink: 0; font-size: 18px; }
+  /* Prev/next month arrows on the Costs "Recent" list — same layout as the
+     day slider above, but flanking a text label instead of a date input. */
+  .month-nav-label { flex: 1; min-width: 0; text-align: center; font-weight: 600; font-size: 14px; }
   .action-choice { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
   .action-choice button { border-radius: 3px; font-size: 12px; padding: 10px 14px; cursor: pointer; white-space: nowrap; touch-action: manipulation; }
   .choice-edit { background: none; border: 1px solid var(--brassDim); color: var(--brass); }
@@ -499,6 +502,11 @@
 
     <div class="section-title"><h2 id="cost-list-title">Recent</h2></div>
     <div class="card" id="cost-list-card">
+      <div class="date-nav" id="cost-month-nav" style="margin-bottom:12px;">
+        <button type="button" id="cost-month-prev-btn" class="action-btn" aria-label="Previous month">&#8249;</button>
+        <div class="month-nav-label" id="cost-month-label"></div>
+        <button type="button" id="cost-month-next-btn" class="action-btn" aria-label="Next month">&#8250;</button>
+      </div>
       <div id="cost-list"></div>
       <div class="subtotal" id="cost-list-subtotal" style="display:none;"></div>
     </div>
@@ -1451,6 +1459,22 @@
 
   // ---------- costs tab ----------
   let costType = "restocking";
+
+  // Month filter for the Costs "Recent" list — defaults to the current
+  // calendar month, stored as "YYYY-MM". Shared across all three cost
+  // types so switching type doesn't reset which month you're looking at.
+  let costMonth = todayISO().slice(0, 7);
+
+  function monthLabel(ym) {
+    const [y, m] = ym.split("-").map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }
+  function shiftCostMonth(deltaMonths) {
+    const [y, m] = costMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + deltaMonths, 1);
+    costMonth = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    renderCostList();
+  }
   const COST_TYPE_LABELS = { restocking: "Item restocked", repair: "Repair / usage description", expense: "Expense name" };
 
   function renderCostFields() {
@@ -1601,14 +1625,18 @@
     const titleEl = document.getElementById("cost-list-title");
     if (titleEl) titleEl.textContent = "Recent — " + COST_TYPE_TITLE[costType];
 
+    const monthLabelEl = document.getElementById("cost-month-label");
+    if (monthLabelEl) monthLabelEl.textContent = monthLabel(costMonth);
+
     const filtered = costListForType(costType)
+      .filter((c) => c.date.slice(0, 7) === costMonth)
       .map((c) => ({ ...c, type: costType }))
       .sort((a, b) => b.date.localeCompare(a.date));
 
     const listEl = document.getElementById("cost-list");
     const subtotalEl = document.getElementById("cost-list-subtotal");
     if (!filtered.length) {
-      listEl.innerHTML = `<div class="empty-note">${activeSyncUrl() && !dataLoaded ? "Loading&hellip;" : "No " + COST_TYPE_TITLE[costType].toLowerCase() + " logged yet."}</div>`;
+      listEl.innerHTML = `<div class="empty-note">${activeSyncUrl() && !dataLoaded ? "Loading&hellip;" : "No " + COST_TYPE_TITLE[costType].toLowerCase() + " logged in " + monthLabel(costMonth) + "."}</div>`;
       subtotalEl.style.display = "none";
       subtotalEl.innerHTML = "";
     } else {
@@ -1658,7 +1686,7 @@
 
       const shownTotal = filtered.reduce((s, c) => s + c.amount, 0);
       subtotalEl.style.display = "flex";
-      subtotalEl.innerHTML = `<span>${COST_TYPE_TITLE[costType]} total</span><span class="mono">${money(shownTotal)}</span>`;
+      subtotalEl.innerHTML = `<span>${COST_TYPE_TITLE[costType]} total &mdash; ${monthLabel(costMonth)}</span><span class="mono">${money(shownTotal)}</span>`;
     }
 
     const totalRestock = restocks.reduce((s, c) => s + c.amount, 0);
@@ -2704,6 +2732,8 @@ function doGet(e) {
   document.getElementById("date-input").addEventListener("change", renderEntryList);
   document.getElementById("date-prev-btn").addEventListener("click", () => shiftDate(-1));
   document.getElementById("date-next-btn").addEventListener("click", () => shiftDate(1));
+  document.getElementById("cost-month-prev-btn").addEventListener("click", () => shiftCostMonth(-1));
+  document.getElementById("cost-month-next-btn").addEventListener("click", () => shiftCostMonth(1));
   document.getElementById("add-btn").addEventListener("click", addEntry);
   document.getElementById("export-btn").addEventListener("click", exportCSV);
   document.getElementById("copy-btn").addEventListener("click", copySummary);
