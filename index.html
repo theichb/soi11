@@ -267,12 +267,30 @@
     .no-print { display: none !important; }
     html, body { background: #fff; }
     body { color: #17110E; }
+    /* Each tab reskins the page by setting these custom properties on
+       <body>; printing should always come out light-on-white regardless
+       of which tab (and theme) was active, so re-pin every one of them
+       here — same specificity as the theme rules above, but later in the
+       stylesheet, so it wins only inside @media print. */
+    body.theme-light, body.theme-dashgreen, body.theme-costs, body {
+      --ink: #ffffff;
+      --hide: #ffffff;
+      --edge: #cccccc;
+      --brass: #7A5E2E;
+      --brassDim: #C69749;
+      --bone: #17110E;
+      --muted: #555555;
+      --oxblood: #96371F;
+      --verdigris: #2F6B30;
+      background: #fff;
+      color: #17110E;
+    }
   }
 </style>
 </head>
 <body class="theme-light">
 
-<div class="note-banner">
+<div class="note-banner no-print">
   <span id="banner-sync-text"><strong>Live sync</strong> — every sale, restock, repair, and expense saves straight to your Google Sheet.</span>
 </div>
 
@@ -364,10 +382,13 @@
 
   <!-- ================= DASHBOARD ================= -->
   <div id="view-dashboard" style="display:none;">
-    <div class="top">
-      <div class="label">Sales Log &middot; Dashboard</div>
-      <h1>The books, so far</h1>
-      <p class="intro">Every sale logged, and what it leaves you after stock and bills.</p>
+    <div class="top" style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+      <div>
+        <div class="label">Sales Log &middot; Dashboard</div>
+        <h1>The books, so far</h1>
+        <p class="intro">Every sale logged, and what it leaves you after stock and bills.</p>
+      </div>
+      <button type="button" id="dash-print-btn" class="action-btn no-print" title="Print" aria-label="Print dashboard" style="flex-shrink:0; margin-top:4px; font-size:18px;">&#9113;</button>
     </div>
 
     <div class="card">
@@ -2314,6 +2335,12 @@ function doGet(e) {
   document.getElementById("tab-dashboard").addEventListener("click", () => switchTab("dashboard"));
   document.getElementById("tab-costs").addEventListener("click", () => switchTab("costs"));
   document.getElementById("tab-sync").addEventListener("click", () => switchTab("sync"));
+
+  // Print button on the Dashboard — the .no-print rules (and the palette
+  // reset above them) keep this to just the report itself: no tab bar,
+  // banner, or range-picker chrome, and readable dark-on-white regardless
+  // of which theme was active when it was printed.
+  document.getElementById("dash-print-btn").addEventListener("click", () => window.print());
 
   document.getElementById("date-input").addEventListener("change", renderEntryList);
   document.getElementById("date-prev-btn").addEventListener("click", () => shiftDate(-1));
