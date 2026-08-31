@@ -503,6 +503,17 @@
       <div class="subtotal" id="cost-list-subtotal" style="display:none;"></div>
     </div>
 
+    <!-- Restocking only — barcodes are created off restocked items, so this
+         sits right under that list rather than tucked away on Sync. -->
+    <div class="card" id="item-barcode-section" style="display:none;">
+      <div class="section-title" style="margin-top:0;">
+        <h2>Item barcodes</h2>
+        <button type="button" class="action-btn no-print" id="print-barcodes-btn" title="Print all labels" aria-label="Print all barcode labels" style="font-size:16px;">&#9113;</button>
+      </div>
+      <p class="intro" style="margin:0 0 10px;">Created automatically the first time each item is restocked — the barcode is just the item's own name, so scanning it later hands back that same name. Saved to the "Items" tab in your Google Sheet.</p>
+      <div id="item-barcode-list"></div>
+    </div>
+
     <div class="grand-total" id="cost-total"></div>
   </div>
 
@@ -512,15 +523,6 @@
       <div class="label">Sales Log &middot; Sync</div>
       <h1>Google Sheets sync</h1>
       <p class="intro">This app is already connected to your Google Sheet — it works the same on any device with no setup.</p>
-    </div>
-
-    <div class="card">
-      <div class="section-title" style="margin-top:0;">
-        <h2>Item barcodes</h2>
-        <button type="button" class="action-btn no-print" id="print-barcodes-btn" title="Print all labels" aria-label="Print all barcode labels" style="font-size:16px;">&#9113;</button>
-      </div>
-      <p class="intro" style="margin:0 0 10px;">Created automatically the first time each item is restocked — the barcode is just the item's own name, so scanning it later hands back that same name. Saved to the "Items" tab in your Google Sheet.</p>
-      <div id="item-barcode-list"></div>
     </div>
 
     <div class="card">
@@ -1457,6 +1459,9 @@
     // for restocking (buying stock) — a repair or a bill isn't one of
     // those named items, so hide it for those two types.
     document.getElementById("cost-quick-pick-chips").style.display = costType === "restocking" ? "" : "none";
+    // Barcodes only ever come from restocked items — no point showing the
+    // list under Repairs or Expenses.
+    document.getElementById("item-barcode-section").style.display = costType === "restocking" ? "" : "none";
   }
 
   // Restocking only: qty × price per unit fills Amount automatically, the
@@ -1661,6 +1666,7 @@
       <div class="big mono">${money(totalRestock + totalRepair + totalExpense)}</div>
       <div class="rows">restocking <span>${money(totalRestock)}</span><br/>repairs &amp; usage <span>${money(totalRepair)}</span><br/>expenses <span>${money(totalExpense)}</span></div>
     `;
+    if (costType === "restocking") renderItemBarcodes();
   }
 
   document.querySelectorAll("#cost-type-chips .item-chip").forEach((chip) => {
@@ -2512,7 +2518,6 @@ function doGet(e) {
   function renderSyncTab() {
     document.getElementById("script-code").textContent = APPS_SCRIPT_SOURCE;
     document.getElementById("sync-url-input").value = store.syncUrl || "";
-    renderItemBarcodes();
     const n = pendingCount();
     if (!activeSyncUrl()) updateSyncStatus("off", "Not connected");
     else if (n > 0) updateSyncStatus("off", `${n} change${n === 1 ? "" : "s"} waiting to sync`);
