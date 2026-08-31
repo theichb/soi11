@@ -512,6 +512,9 @@
       </div>
       <p class="intro" style="margin:0 0 10px;">Created automatically the first time each item is restocked — the barcode is just the item's own name, so scanning it later hands back that same name. Saved to the "Items" tab in your Google Sheet.</p>
       <div id="item-barcode-list"></div>
+      <div class="btn-row single no-print" id="backfill-barcodes-row" style="display:none;">
+        <button type="button" class="btn btn-secondary" id="backfill-barcodes-btn">Generate for existing items</button>
+      </div>
     </div>
 
     <div class="grand-total" id="cost-total"></div>
@@ -2466,14 +2469,33 @@ function doGet(e) {
     </svg>`;
   }
 
+  // Item names already restocked (from history, possibly before this
+  // feature existed) that don't have a barcode yet — what "Generate for
+  // existing items" below has to catch up on.
+  function distinctRestockedItemNames() {
+    const known = new Set(items.map((it) => it.item));
+    const seen = new Set();
+    const missing = [];
+    restocks.forEach((r) => {
+      const name = (r.name || "").trim();
+      if (!name || known.has(name) || seen.has(name)) return;
+      seen.add(name);
+      missing.push(name);
+    });
+    return missing;
+  }
+
   function renderItemBarcodes() {
     const el = document.getElementById("item-barcode-list");
-    if (!el) return;
-    if (!items.length) {
-      el.innerHTML = `<div class="barcode-empty">No item barcodes yet — one's created automatically the first time you restock a new item.</div>`;
-      return;
+    if (el) {
+      if (!items.length) {
+        el.innerHTML = `<div class="barcode-empty">No item barcodes yet — one's created automatically the first time you restock a new item.</div>`;
+      } else {
+        el.innerHTML = `<div class="barcode-item-list">` + items.map((it) => `<div class="barcode-label">${renderBarcodeSVG(it.barcode)}</div>`).join("") + `</div>`;
+      }
     }
-    el.innerHTML = `<div class="barcode-item-list">` + items.map((it) => `<div class="barcode-label">${renderBarcodeSVG(it.barcode)}</div>`).join("") + `</div>`;
+    const row = document.getElementById("backfill-barcodes-row");
+    if (row) row.style.display = distinctRestockedItemNames().length ? "" : "none";
   }
 
   // Swaps the label sheet into #barcode-print-area, hides the rest of the
@@ -2493,8 +2515,10 @@ function doGet(e) {
   // the sheet to add this item to the "Items" tab if it isn't there yet
   // (the Apps Script side is the source of truth and de-dupes itself), then
   // mirrors that locally so the list on this device updates immediately
-  // without waiting for the next full reload.
-  async function ensureItemBarcode(name) {
+  // without waiting for the next full reload. opts.silent skips the
+  // per-item toast — used by backfillItemBarcodes() below, which shows one
+  // summary toast instead of one per item.
+  async function ensureItemBarcode(name, opts = {}) {
     if (!name || items.some((it) => it.item === name) || !activeSyncUrl()) return;
     try {
       const res = await fetch(activeSyncUrl(), {
@@ -2507,13 +2531,37 @@ function doGet(e) {
       if (data && data.ok && !items.some((it) => it.item === name)) {
         items.push({ item: name, barcode: name });
         renderItemBarcodes();
-        if (data.created) showToast(`Barcode created for "${name}"`);
+        if (data.created && !opts.silent) showToast(`Barcode created for "${name}"`);
       }
     } catch (err) {
       // Silent — a nice-to-have alongside the cost record's own sync, which
       // already surfaces its own failure/retry state for the record itself.
     }
   }
+
+  // Catches up any item that was restocked before this feature existed (so
+  // it never went through ensureItemBarcode above) — walks every distinct
+  // name already in the Restocking history and creates a barcode for each
+  // one still missing. Sequential on purpose: each request takes the same
+  // server-side lock as every other sync call, so firing them all at once
+  // would just make them queue up anyway.
+  async function backfillItemBarcodes() {
+    if (!activeSyncUrl()) { showToast("Connect to Google Sheets first"); return; }
+    const missing = distinctRestockedItemNames();
+    if (!missing.length) { showToast("Every restocked item already has a barcode"); return; }
+    const btn = document.getElementById("backfill-barcodes-btn");
+    if (btn) { btn.disabled = true; btn.textContent = `Creating ${missing.length}…`; }
+    let created = 0;
+    for (const name of missing) {
+      const before = items.length;
+      await ensureItemBarcode(name, { silent: true });
+      if (items.length > before) created++;
+    }
+    if (btn) { btn.disabled = false; btn.textContent = "Generate for existing items"; }
+    renderItemBarcodes();
+    showToast(created ? `Created ${created} barcode${created === 1 ? "" : "s"}` : "Couldn't reach the sheet — try again");
+  }
+  document.getElementById("backfill-barcodes-btn").addEventListener("click", backfillItemBarcodes);
 
   function renderSyncTab() {
     document.getElementById("script-code").textContent = APPS_SCRIPT_SOURCE;
