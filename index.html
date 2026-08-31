@@ -1689,11 +1689,15 @@
       subtotalEl.innerHTML = `<span>${COST_TYPE_TITLE[costType]} total &mdash; ${monthLabel(costMonth)}</span><span class="mono">${money(shownTotal)}</span>`;
     }
 
-    const totalRestock = restocks.reduce((s, c) => s + c.amount, 0);
-    const totalRepair = repairs.reduce((s, c) => s + c.amount, 0);
-    const totalExpense = expenses.reduce((s, c) => s + c.amount, 0);
+    // Scoped to the same month the slider above is showing, not all-time —
+    // there's only the one month control on this tab, so this total tracks
+    // it instead of adding a second slider of its own.
+    const inMonth = (c) => c.date.slice(0, 7) === costMonth;
+    const totalRestock = restocks.filter(inMonth).reduce((s, c) => s + c.amount, 0);
+    const totalRepair = repairs.filter(inMonth).reduce((s, c) => s + c.amount, 0);
+    const totalExpense = expenses.filter(inMonth).reduce((s, c) => s + c.amount, 0);
     document.getElementById("cost-total").innerHTML = `
-      <div class="label">All-time costs</div>
+      <div class="label">Costs &mdash; ${monthLabel(costMonth)}</div>
       <div class="big mono">${money(totalRestock + totalRepair + totalExpense)}</div>
       <div class="rows">restocking <span>${money(totalRestock)}</span><br/>repairs &amp; usage <span>${money(totalRepair)}</span><br/>expenses <span>${money(totalExpense)}</span></div>
     `;
