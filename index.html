@@ -542,7 +542,7 @@
   // it means those settings carry over automatically; changing it would
   // silently disconnect this file from a URL you'd already set up.
   const STORE_KEY = "sales-log-store";
-  const DEFAULT_STORE = { productCosts: {}, syncUrl: "", quickPicks: ["Va", "Cs", "VG", "V(3o)", "C(3o)"], salesmen: ["Yamu", "Santhos"], lastSalesman: "", pinAttempts: 0, pinLockedOut: false, dashLang: "en" };
+  const DEFAULT_STORE = { productCosts: {}, syncUrl: "", quickPicks: ["Va", "Cs", "VG", "V(3o)", "C(3o)"], salesmen: ["Yamu", "Santhos"], lastSalesman: "", pinAttempts: 0, pinLockedOut: false, pinUnlockedAt: 0, dashLang: "en" };
   let store = Object.assign({}, DEFAULT_STORE);
   function sortQuickPicks() { store.quickPicks.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })); }
   sortQuickPicks();
@@ -2381,17 +2381,21 @@ function doGet(e) {
   // ---------- tab lock ----------
   // Costs and Sync show buying prices, totals, and the sheet connection —
   // gated behind a PIN so a casual glance at the phone doesn't reveal them.
-  // Unlocking itself lasts for this app session only (reloading asks again),
-  // but the attempt count is saved to this device's localStorage — so
-  // reloading to dodge a lockout doesn't work on the SAME device. A NEW
-  // device has no saved attempts yet and gets its own fresh 5 tries.
-  const TAB_PASSWORD = "091988";
+  // An unlock is only good for 24 hours, checked fresh (against a saved
+  // timestamp) every time a locked tab is opened — so it re-locks on its
+  // own even if the app is just left open on the phone, not only on
+  // reload. The attempt count and the unlock timestamp both live in this
+  // device's localStorage, so neither reloading nor just waiting out the
+  // lock dodges it on the SAME device. A brand-new device has none of
+  // that saved yet, so it always starts locked and gets its own fresh 5
+  // attempts.
+  const TAB_PASSWORD = "012003";
   const LOCKED_TABS = ["costs", "sync"];
-  let protectedUnlocked = false; // one PIN unlocks both for the rest of this session
   const MAX_PIN_ATTEMPTS = 5;
+  const UNLOCK_TTL_MS = 24 * 60 * 60 * 1000;
 
   async function unlockTab() {
-    if (protectedUnlocked) return true;
+    if (store.pinUnlockedAt && (Date.now() - store.pinUnlockedAt) < UNLOCK_TTL_MS) return true;
     if (store.pinLockedOut) { showToast("Too many attempts — locked on this device"); return false; }
     // inputmode "numeric" brings up the number pad on mobile since this is
     // now a digits-only PIN rather than a general password.
@@ -2410,8 +2414,8 @@ function doGet(e) {
       return false;
     }
     store.pinAttempts = 0;
+    store.pinUnlockedAt = Date.now();
     saveStoreNow();
-    protectedUnlocked = true;
     return true;
   }
 
