@@ -163,6 +163,16 @@
   }
   .action-btn:disabled { color: var(--muted); border-color: var(--edge); opacity: .4; cursor: default; }
 
+  /* EN/TH switch on the Dashboard. */
+  .lang-toggle { display: flex; border: 1px solid var(--edge); border-radius: 3px; overflow: hidden; }
+  .lang-btn {
+    background: none; border: none; color: var(--muted); font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; padding: 7px 11px; cursor: pointer; font-family: 'Karla', sans-serif;
+    touch-action: manipulation;
+  }
+  .lang-btn + .lang-btn { border-left: 1px solid var(--edge); }
+  .lang-btn.on { color: var(--brass); background: var(--hide); }
+
   /* Prev/next day arrows flanking the date field — a quick way to step
      through previous entries one day at a time instead of opening the
      native date picker every time. */
@@ -384,32 +394,38 @@
   <div id="view-dashboard" style="display:none;">
     <div class="top" style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
       <div>
-        <div class="label">Sales Log &middot; Dashboard</div>
-        <h1>The books, so far</h1>
-        <p class="intro">Every sale logged, and what it leaves you after stock and bills.</p>
+        <div class="label" id="dash-tab-label">Sales Log &middot; Dashboard</div>
+        <h1 id="dash-title">The books, so far</h1>
+        <p class="intro" id="dash-intro">Every sale logged, and what it leaves you after stock and bills.</p>
       </div>
-      <button type="button" id="dash-print-btn" class="action-btn no-print" title="Print" aria-label="Print dashboard" style="flex-shrink:0; margin-top:4px; font-size:18px;">&#9113;</button>
+      <div class="no-print" style="display:flex; flex-direction:column; align-items:flex-end; gap:8px; flex-shrink:0;">
+        <div class="lang-toggle" id="dash-lang-toggle">
+          <button type="button" class="lang-btn" data-lang="en">EN</button>
+          <button type="button" class="lang-btn" data-lang="th">TH</button>
+        </div>
+        <button type="button" id="dash-print-btn" class="action-btn" title="Print" aria-label="Print dashboard" style="font-size:18px;">&#9113;</button>
+      </div>
     </div>
 
     <div class="card">
-      <div class="label">Range</div>
+      <div class="label" id="dash-range-label">Range</div>
       <div class="range-row" id="range-chips"></div>
     </div>
 
     <div class="dash-stats" id="dash-stats"></div>
 
     <div class="card">
-      <div class="section-title" style="margin-top:0;"><h2>By item</h2></div>
+      <div class="section-title" style="margin-top:0;"><h2 id="dash-section-byitem">By item</h2></div>
       <div class="dash-donut-wrap" id="dash-donut-wrap"></div>
     </div>
 
-    <div class="section-title"><h2>By item, in detail</h2></div>
+    <div class="section-title"><h2 id="dash-section-byitemdetail">By item, in detail</h2></div>
     <div class="card" id="dash-items"></div>
 
-    <div class="section-title"><h2>By day of week</h2></div>
+    <div class="section-title"><h2 id="dash-section-bydow">By day of week</h2></div>
     <div class="card" id="dash-dow"></div>
 
-    <div class="section-title"><h2>Wages</h2></div>
+    <div class="section-title"><h2 id="dash-section-wages">Wages</h2></div>
     <div class="card" id="dash-wages"></div>
 
     <div class="grand-total" id="dash-total"></div>
@@ -526,7 +542,7 @@
   // it means those settings carry over automatically; changing it would
   // silently disconnect this file from a URL you'd already set up.
   const STORE_KEY = "sales-log-store";
-  const DEFAULT_STORE = { productCosts: {}, syncUrl: "", quickPicks: ["Va", "Cs", "VG", "V(3o)", "C(3o)"], salesmen: ["Yamu", "Santhos"], lastSalesman: "", pinAttempts: 0, pinLockedOut: false };
+  const DEFAULT_STORE = { productCosts: {}, syncUrl: "", quickPicks: ["Va", "Cs", "VG", "V(3o)", "C(3o)"], salesmen: ["Yamu", "Santhos"], lastSalesman: "", pinAttempts: 0, pinLockedOut: false, dashLang: "en" };
   let store = Object.assign({}, DEFAULT_STORE);
   function sortQuickPicks() { store.quickPicks.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })); }
   sortQuickPicks();
@@ -1150,9 +1166,96 @@
     return { start: isoDate(d), end: null };
   }
 
+  // ---------- dashboard language (EN/TH) ----------
+  // Only the Dashboard's own labels are translated — item names, salesman
+  // names, and dates are whatever the user typed and stay as-is either way.
+  const DASH_I18N = {
+    en: {
+      tabLabel: "Sales Log · Dashboard",
+      title: "The books, so far",
+      intro: "Every sale logged, and what it leaves you after stock and bills.",
+      range: "Range",
+      rangeOptions: { month: "This Month", lastmonth: "Previous Month", "7": "7 days", "30": "30 days", "90": "90 days", all: "All time" },
+      revenue: "Revenue",
+      unitsSold: "Units sold",
+      grossProfit: "Gross profit",
+      entries: "Entries",
+      byItem: "By item",
+      byItemDetail: "By item, in detail",
+      byDow: "By day of week",
+      wages: "Wages",
+      noSales: "No sales in this range yet.",
+      item: "Item",
+      units: "Units",
+      dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+      unassigned: "(unassigned)",
+      netLabel: "Net (after expenses, restocking, repairs & wages)",
+      rowRevenue: "revenue",
+      rowRestocking: "restocking",
+      rowRepairs: "repairs & usage",
+      rowExpenses: "expenses",
+      rowWages: "wages",
+    },
+    th: {
+      tabLabel: "บันทึกยอดขาย · แดชบอร์ด",
+      title: "สรุปบัญชีร้าน",
+      intro: "ยอดขายทุกรายการที่บันทึก และเงินที่เหลือหลังหักต้นทุนและค่าใช้จ่าย",
+      range: "ช่วงเวลา",
+      rangeOptions: { month: "เดือนนี้", lastmonth: "เดือนที่แล้ว", "7": "7 วัน", "30": "30 วัน", "90": "90 วัน", all: "ทั้งหมด" },
+      revenue: "ยอดขาย",
+      unitsSold: "จำนวนที่ขาย",
+      grossProfit: "กำไรขั้นต้น",
+      entries: "รายการ",
+      byItem: "แยกตามสินค้า",
+      byItemDetail: "รายละเอียดตามสินค้า",
+      byDow: "แยกตามวันในสัปดาห์",
+      wages: "ค่าแรง",
+      noSales: "ยังไม่มียอดขายในช่วงนี้",
+      item: "สินค้า",
+      units: "จำนวน",
+      dow: ["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"],
+      unassigned: "(ไม่ระบุ)",
+      netLabel: "ยอดสุทธิ (หลังหักค่าใช้จ่าย การเติมสินค้า ค่าซ่อม และค่าแรง)",
+      rowRevenue: "ยอดขาย",
+      rowRestocking: "เติมสินค้า",
+      rowRepairs: "ซ่อมแซม/ใช้งาน",
+      rowExpenses: "ค่าใช้จ่าย",
+      rowWages: "ค่าแรง",
+    },
+  };
+  function t(key) { return (DASH_I18N[store.dashLang] || DASH_I18N.en)[key]; }
+
+  function renderDashStaticText() {
+    document.getElementById("dash-tab-label").textContent = t("tabLabel");
+    document.getElementById("dash-title").textContent = t("title");
+    document.getElementById("dash-intro").textContent = t("intro");
+    document.getElementById("dash-range-label").textContent = t("range");
+    document.getElementById("dash-section-byitem").textContent = t("byItem");
+    document.getElementById("dash-section-byitemdetail").textContent = t("byItemDetail");
+    document.getElementById("dash-section-bydow").textContent = t("byDow");
+    document.getElementById("dash-section-wages").textContent = t("wages");
+  }
+
+  function renderDashLangToggle() {
+    document.querySelectorAll("#dash-lang-toggle .lang-btn").forEach((btn) => {
+      btn.classList.toggle("on", btn.dataset.lang === (store.dashLang || "en"));
+    });
+  }
+
+  document.querySelectorAll("#dash-lang-toggle .lang-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (store.dashLang === btn.dataset.lang) return;
+      store.dashLang = btn.dataset.lang;
+      saveStore();
+      renderDashLangToggle();
+      renderDashStaticText();
+      renderDashboard();
+    });
+  });
+
   function renderRangeChips() {
     const wrap = document.getElementById("range-chips");
-    const options = [["month", "This Month"], ["lastmonth", "Previous Month"], ["7", "7 days"], ["30", "30 days"], ["90", "90 days"], ["all", "All time"]];
+    const options = [["month", t("rangeOptions").month], ["lastmonth", t("rangeOptions").lastmonth], ["7", t("rangeOptions")["7"]], ["30", t("rangeOptions")["30"]], ["90", t("rangeOptions")["90"]], ["all", t("rangeOptions").all]];
     wrap.innerHTML = options.map(([v, label]) =>
       `<button type="button" class="item-chip ${String(dashRange) === v ? "on" : ""}" data-range="${v}">${label}</button>`
     ).join("");
@@ -1167,7 +1270,7 @@
 
   function renderDonut(items, total) {
     const wrap = document.getElementById("dash-donut-wrap");
-    if (!items.length) { wrap.innerHTML = `<div class="empty-note">No sales in this range yet.</div>`; return; }
+    if (!items.length) { wrap.innerHTML = `<div class="empty-note">${t("noSales")}</div>`; return; }
     const r = 70, circ = 2 * Math.PI * r;
     let offset = 0;
     const segments = items.map((it, i) => {
@@ -1185,7 +1288,7 @@
     wrap.innerHTML = `
       <div class="dash-donut">
         <svg width="180" height="180" viewBox="0 0 180 180">${segments}</svg>
-        <div class="dash-donut-center"><div class="label">Revenue</div><div class="mono" style="font-size:15px;">${money(total)}</div></div>
+        <div class="dash-donut-center"><div class="label">${t("revenue")}</div><div class="mono" style="font-size:15px;">${money(total)}</div></div>
       </div>
       <div class="dash-legend">${legend}</div>
     `;
@@ -1220,10 +1323,10 @@
     const net = revenue - otherCosts;
 
     document.getElementById("dash-stats").innerHTML = `
-      <div><div class="label">Revenue</div><div class="v mono">${money(revenue)}</div></div>
-      <div><div class="label">Units sold</div><div class="v mono">${units}</div></div>
-      <div><div class="label">Gross profit</div><div class="v mono" style="color:var(--verdigris)">${money(profit)}</div></div>
-      <div><div class="label">Entries</div><div class="v mono">${list.length}</div></div>
+      <div><div class="label">${t("revenue")}</div><div class="v mono">${money(revenue)}</div></div>
+      <div><div class="label">${t("unitsSold")}</div><div class="v mono">${units}</div></div>
+      <div><div class="label">${t("grossProfit")}</div><div class="v mono" style="color:var(--verdigris)">${money(profit)}</div></div>
+      <div><div class="label">${t("entries")}</div><div class="v mono">${list.length}</div></div>
     `;
 
     const byItem = {};
@@ -1238,9 +1341,9 @@
 
     const itemsEl = document.getElementById("dash-items");
     if (!items.length) {
-      itemsEl.innerHTML = `<div class="empty-note">No sales in this range yet.</div>`;
+      itemsEl.innerHTML = `<div class="empty-note">${t("noSales")}</div>`;
     } else {
-      itemsEl.innerHTML = `<div class="dash-prod-row head"><div>Item</div><div class="num">Units</div><div class="num">Revenue</div></div>`
+      itemsEl.innerHTML = `<div class="dash-prod-row head"><div>${t("item")}</div><div class="num">${t("units")}</div><div class="num">${t("revenue")}</div></div>`
         + items.map((it) => `
           <div class="dash-prod-row">
             <div>${esc(it.name)}</div>
@@ -1252,7 +1355,7 @@
 
     const dow = [0, 0, 0, 0, 0, 0, 0];
     list.forEach((e) => { dow[new Date(e.date + "T00:00:00").getDay()] += e.sell; });
-    const dowLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dowLabels = t("dow");
     const maxDow = Math.max(1, ...dow);
     document.getElementById("dash-dow").innerHTML = dowLabels.map((label, i) => `
       <div class="dash-dow-row">
@@ -1264,7 +1367,7 @@
 
     const bySalesmanDay = {};
     list.forEach((e) => {
-      const name = e.salesman || "(unassigned)";
+      const name = e.salesman || t("unassigned");
       if (!bySalesmanDay[name]) bySalesmanDay[name] = {};
       bySalesmanDay[name][e.date] = (bySalesmanDay[name][e.date] || 0) + e.sell;
     });
@@ -1272,7 +1375,7 @@
     let totalWages = 0;
     const wagesEl = document.getElementById("dash-wages");
     if (!salesmanNames.length) {
-      wagesEl.innerHTML = `<div class="empty-note">No sales in this range yet.</div>`;
+      wagesEl.innerHTML = `<div class="empty-note">${t("noSales")}</div>`;
     } else {
       wagesEl.innerHTML = salesmanNames.map((name) => {
         const days = Object.entries(bySalesmanDay[name]).sort((a, b) => b[0].localeCompare(a[0]));
@@ -1293,14 +1396,14 @@
     }
 
     document.getElementById("dash-total").innerHTML = `
-      <div class="label">Net (after expenses, restocking, repairs &amp; wages)</div>
+      <div class="label">${t("netLabel")}</div>
       <div class="big mono" style="color:${(net - totalWages) >= 0 ? "var(--verdigris)" : "var(--oxblood)"}">${moneyRound(net - totalWages)}</div>
       <div class="rows">
-        revenue <span>${money(revenue)}</span><br/>
-        restocking <span>${money(restockList.reduce((s, e) => s + e.amount, 0))}</span><br/>
-        repairs &amp; usage <span>${money(repairList.reduce((s, e) => s + e.amount, 0))}</span><br/>
-        expenses <span>${money(expenseList.reduce((s, e) => s + e.amount, 0))}</span><br/>
-        wages <span>${money(totalWages)}</span>
+        ${t("rowRevenue")} <span>${money(revenue)}</span><br/>
+        ${t("rowRestocking")} <span>${money(restockList.reduce((s, e) => s + e.amount, 0))}</span><br/>
+        ${t("rowRepairs")} <span>${money(repairList.reduce((s, e) => s + e.amount, 0))}</span><br/>
+        ${t("rowExpenses")} <span>${money(expenseList.reduce((s, e) => s + e.amount, 0))}</span><br/>
+        ${t("rowWages")} <span>${money(totalWages)}</span>
       </div>
     `;
   }
@@ -2326,7 +2429,7 @@ function doGet(e) {
     document.body.classList.toggle("theme-light", which === "entry");
     document.body.classList.toggle("theme-dashgreen", which === "dashboard");
     document.body.classList.toggle("theme-costs", which === "costs" || which === "sync");
-    if (which === "dashboard") renderDashboard();
+    if (which === "dashboard") { renderDashStaticText(); renderDashLangToggle(); renderDashboard(); }
     if (which === "costs") renderCostList();
     if (which === "sync") renderSyncTab();
   }
