@@ -296,6 +296,23 @@
       color: #17110E;
     }
   }
+
+  /* Barcode labels — printed via #barcode-print-area (see printAllBarcodes()),
+     kept off-screen the rest of the time and swapped in only at print time. */
+  .print-only { display: none; }
+  @media print {
+    .print-only { display: block !important; }
+    /* Printing labels shows ONLY the label sheet — everything else in the
+       app (whichever tab happens to be open underneath) is hidden for
+       that one print, then restored via the "afterprint" handler. */
+    body.printing-labels > *:not(#barcode-print-area) { display: none !important; }
+  }
+  .barcode-item-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .barcode-label { background: #fff; border: 1px solid var(--edge); border-radius: 4px; padding: 8px; }
+  .barcode-label svg { width: 100%; height: auto; display: block; }
+  .barcode-empty { color: var(--muted); font-size: 13px; padding: 4px 0; }
+  .barcode-print-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; padding: 16px; }
+  .barcode-print-grid .barcode-label { page-break-inside: avoid; break-inside: avoid; }
 </style>
 </head>
 <body class="theme-light">
@@ -498,6 +515,15 @@
     </div>
 
     <div class="card">
+      <div class="section-title" style="margin-top:0;">
+        <h2>Item barcodes</h2>
+        <button type="button" class="action-btn no-print" id="print-barcodes-btn" title="Print all labels" aria-label="Print all barcode labels" style="font-size:16px;">&#9113;</button>
+      </div>
+      <p class="intro" style="margin:0 0 10px;">Created automatically the first time each item is restocked — the barcode is just the item's own name, so scanning it later hands back that same name. Saved to the "Items" tab in your Google Sheet.</p>
+      <div id="item-barcode-list"></div>
+    </div>
+
+    <div class="card">
       <div class="label" style="margin-bottom:8px;">Using a different sheet?</div>
       <div class="step"><span class="step-num">1</span><span>Open the new Google Sheet, then <span class="mono">Extensions → Apps Script</span>.</span></div>
       <div class="step"><span class="step-num">2</span><span>Delete any starter code, paste in the script below, then save.</span></div>
@@ -524,6 +550,10 @@
   </div>
 
 </div>
+
+<!-- Populated by printAllBarcodes() right before window.print() — hidden
+     on screen, and the only thing left visible on the printed page. -->
+<div id="barcode-print-area" class="print-only"></div>
 
 <div class="toast" id="toast"></div>
 <div id="modal-root" style="display:none;"></div>
@@ -606,6 +636,12 @@
   let restocks = [];
   let repairs = [];
   let expenses = [];
+  // Item → barcode master list, loaded from the "Items" tab and appended to
+  // automatically by ensureItemBarcode() the first time a new item is
+  // restocked. Unlike the four arrays above this isn't per-record — it's
+  // just names, so it's fine for it to lag a few seconds behind on a second
+  // device rather than needing the same live-reload machinery.
+  let items = [];
   let dataLoaded = false;
   // Runs once, right after the first live load — jumps the Log Sales date
   // to whichever day most recently has entries, so opening the app never
@@ -1470,6 +1506,7 @@
     showToast("Added");
 
     if (activeSyncUrl()) syncCost(costType, record);
+    if (activeSyncUrl() && costType === "restocking") ensureItemBarcode(name);
   }
 
   async function syncCost(type, record) {
@@ -1745,6 +1782,35 @@
     });
   }
 
+  // "Items" is a master list, not a per-transaction record — one row per
+  // item name ever restocked, not one per restock. Barcode is just the
+  // item's own name; kept as its own column anyway so a future item could
+  // get a different code without changing this schema.
+  function getItemsSheet() {
+    var sh = ss.getSheetByName("Items");
+    if (!sh) {
+      sh = ss.insertSheet("Items");
+      sh.appendRow(["item", "barcode", "added"]);
+    }
+    return sh;
+  }
+
+  // Idempotent: a second restock of the same item finds its existing row
+  // and does nothing, so this is always safe to call from doPost without
+  // checking first.
+  function ensureItemBarcode(itemName) {
+    var sh = getItemsSheet();
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]) === String(itemName)) return { created: false };
+    }
+    var addedDate = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
+    sh.appendRow([itemName, itemName, addedDate]);
+    return { created: true };
+  }
+
+  var itemResult = null;
+
   if (body.action === "full_sync") {
     fullSync({ sales: body.sales, restocks: body.restocks, repairs: body.repairs, expenses: body.expenses });
     Object.keys(sheetNames).forEach(function (type) {
@@ -1757,6 +1823,8 @@
     var deleteSh = getSheet(sheetNames[body.type]);
     if (sheetNames[body.type] === "Sales") insertSalesTotals(deleteSh);
     applyMerging(deleteSh, sheetNames[body.type]);
+  } else if (body.action === "ensure_item") {
+    itemResult = ensureItemBarcode(body.item);
   } else {
     upsertRow(sheetNames[body.type], body.record);
     var upsertSh = getSheet(sheetNames[body.type]);
@@ -1768,7 +1836,9 @@
     rebuildWages();
   }
 
-  return ContentService.createTextOutput(JSON.stringify({ ok: true }))
+  var responseBody = { ok: true };
+  if (itemResult) responseBody.created = itemResult.created;
+  return ContentService.createTextOutput(JSON.stringify(responseBody))
     .setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -2145,6 +2215,18 @@ function doGet(e) {
     }).filter(function (obj) { return obj.id; });
     out[sheetDefs[sheetName]] = rows;
   });
+
+  // Items has its own shape (item/barcode/added, no id column), so it's
+  // read separately rather than through the id-filtered loop above.
+  out.items = [];
+  var itemsSh = ss.getSheetByName("Items");
+  if (itemsSh) {
+    var idata = itemsSh.getDataRange().getValues();
+    for (var ii = 1; ii < idata.length; ii++) {
+      if (idata[ii][0]) out.items.push({ item: String(idata[ii][0]), barcode: String(idata[ii][1] || idata[ii][0]) });
+    }
+  }
+
   return ContentService.createTextOutput(JSON.stringify(out))
     .setMimeType(ContentService.MimeType.JSON);
 }`;
@@ -2254,11 +2336,13 @@ function doGet(e) {
       restocks = keepUnconfirmed(liveRestocks, restocks);
       repairs = keepUnconfirmed(liveRepairs, repairs);
       expenses = keepUnconfirmed(liveExpenses, expenses);
+      items = (data.items || []).map((r) => ({ item: String(r.item), barcode: String(r.barcode || r.item) }));
 
       dataLoaded = true;
       jumpToLastEntryDate();
       renderEntryList();
       renderCostList();
+      renderItemBarcodes();
       updateBannerSyncState();
       if (showMessages) showToast("Loaded from Google Sheets");
       return true;
@@ -2311,9 +2395,124 @@ function doGet(e) {
     }
   }
 
+  // ---------- item barcodes ----------
+  // Code 128 (Subset B), implemented by hand so barcode generation works
+  // fully offline inside the PWA — nothing to fetch from a CDN. A barcode's
+  // content is just the item's own name (whatever's typed on Restocking),
+  // so scanning one later hands back exactly that name with no separate
+  // code to look up or keep in sync. The pattern table below was
+  // cross-checked against a real decoder (zbar) before shipping, covering
+  // every character these barcodes actually need (letters, digits, and the
+  // punctuation already used in item names like "V(3o)").
+  const CODE128_PATTERNS = [
+    "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312",
+    "132212", "221213", "221312", "231212", "112232", "122132", "122231", "113222",
+    "123122", "123221", "223211", "221132", "221231", "213212", "223112", "312131",
+    "311222", "321122", "321221", "312212", "322112", "322211", "212123", "212321",
+    "232121", "111323", "131123", "131321", "112313", "132113", "132311", "211313",
+    "231113", "231311", "112133", "112331", "132131", "113123", "113321", "133121",
+    "313121", "211331", "231131", "213113", "213311", "213131", "311123", "311321",
+    "331121", "312113", "312311", "332111", "314111", "221411", "431111", "111224",
+    "111422", "121124", "121421", "141122", "141221", "112214", "112412", "122114",
+    "122411", "142112", "142211", "241211", "221114", "413111", "241112", "134111",
+    "111242", "121142", "121241", "114212", "124112", "124211", "411212", "421112",
+    "421211", "212141", "214121", "412121", "111143", "111341", "131141", "114113",
+    "114311", "411113", "411311", "113141", "114131", "311141", "411131", "211412",
+    "211214", "211232", "2331112",
+  ];
+  const CODE128_START_B = 104;
+  const CODE128_STOP = 106;
+
+  // Throws if `text` has a character Code Set B can't carry (outside
+  // printable ASCII 32-126) — callers show that message instead of a
+  // barcode rather than silently rendering something unscannable.
+  function code128Encode(text) {
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      if (code < 32 || code > 126) throw new Error(`Can't make a barcode for "${text}" — "${ch}" isn't supported.`);
+    }
+    const values = [...text].map((ch) => ch.charCodeAt(0) - 32);
+    let checksum = CODE128_START_B;
+    values.forEach((v, i) => { checksum += v * (i + 1); });
+    checksum %= 103;
+    const symbolValues = [CODE128_START_B, ...values, checksum, CODE128_STOP];
+    return symbolValues.map((v) => CODE128_PATTERNS[v]).join("");
+  }
+
+  function renderBarcodeSVG(text) {
+    let pattern;
+    try { pattern = code128Encode(text); }
+    catch (err) { return `<div class="barcode-empty">${esc(err.message)}</div>`; }
+    const moduleWidth = 2, barHeight = 50, quiet = 10, labelHeight = 16;
+    const widths = pattern.split("").map(Number);
+    const totalModules = widths.reduce((a, b) => a + b, 0) + quiet * 2;
+    const totalWidthPx = totalModules * moduleWidth;
+    let xModules = quiet, bar = true, rects = "";
+    widths.forEach((w) => {
+      if (bar) rects += `<rect x="${xModules * moduleWidth}" y="0" width="${w * moduleWidth}" height="${barHeight}"/>`;
+      xModules += w;
+      bar = !bar;
+    });
+    return `<svg viewBox="0 0 ${totalWidthPx} ${barHeight + labelHeight}" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="${totalWidthPx}" height="${barHeight}" fill="#fff"/>
+      <g fill="#000">${rects}</g>
+      <text x="${totalWidthPx / 2}" y="${barHeight + 12}" font-family="'Space Mono', ui-monospace, monospace" font-size="11" text-anchor="middle" fill="#000">${esc(text)}</text>
+    </svg>`;
+  }
+
+  function renderItemBarcodes() {
+    const el = document.getElementById("item-barcode-list");
+    if (!el) return;
+    if (!items.length) {
+      el.innerHTML = `<div class="barcode-empty">No item barcodes yet — one's created automatically the first time you restock a new item.</div>`;
+      return;
+    }
+    el.innerHTML = `<div class="barcode-item-list">` + items.map((it) => `<div class="barcode-label">${renderBarcodeSVG(it.barcode)}</div>`).join("") + `</div>`;
+  }
+
+  // Swaps the label sheet into #barcode-print-area, hides the rest of the
+  // page for that one print (see the .printing-labels rule), then restores
+  // it once the print dialog closes (or is cancelled) via "afterprint".
+  function printAllBarcodes() {
+    if (!items.length) { showToast("No item barcodes yet"); return; }
+    const area = document.getElementById("barcode-print-area");
+    area.innerHTML = `<div class="barcode-print-grid">` + items.map((it) => `<div class="barcode-label">${renderBarcodeSVG(it.barcode)}</div>`).join("") + `</div>`;
+    document.body.classList.add("printing-labels");
+    window.print();
+  }
+  window.addEventListener("afterprint", () => document.body.classList.remove("printing-labels"));
+  document.getElementById("print-barcodes-btn").addEventListener("click", printAllBarcodes);
+
+  // Fire-and-forget: called right after a restocking entry is added. Asks
+  // the sheet to add this item to the "Items" tab if it isn't there yet
+  // (the Apps Script side is the source of truth and de-dupes itself), then
+  // mirrors that locally so the list on this device updates immediately
+  // without waiting for the next full reload.
+  async function ensureItemBarcode(name) {
+    if (!name || items.some((it) => it.item === name) || !activeSyncUrl()) return;
+    try {
+      const res = await fetch(activeSyncUrl(), {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "ensure_item", item: name }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.ok && !items.some((it) => it.item === name)) {
+        items.push({ item: name, barcode: name });
+        renderItemBarcodes();
+        if (data.created) showToast(`Barcode created for "${name}"`);
+      }
+    } catch (err) {
+      // Silent — a nice-to-have alongside the cost record's own sync, which
+      // already surfaces its own failure/retry state for the record itself.
+    }
+  }
+
   function renderSyncTab() {
     document.getElementById("script-code").textContent = APPS_SCRIPT_SOURCE;
     document.getElementById("sync-url-input").value = store.syncUrl || "";
+    renderItemBarcodes();
     const n = pendingCount();
     if (!activeSyncUrl()) updateSyncStatus("off", "Not connected");
     else if (n > 0) updateSyncStatus("off", `${n} change${n === 1 ? "" : "s"} waiting to sync`);
