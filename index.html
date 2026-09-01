@@ -1834,13 +1834,54 @@
   // item name ever restocked, not one per restock. Barcode holds each
   // item's own unique number (starting at 1001), assigned here so numbering
   // stays centralized even with multiple devices restocking at once.
+  // Column D repeats that same number, but formatted with "Libre Barcode
+  // 128 Text" — a free Google Font that renders plain digits as an actual
+  // scannable Code 128 barcode (with the number printed underneath) purely
+  // through the font itself. No image, no external service to be down or
+  // slow — the cell just holds ordinary text, styled.
   function getItemsSheet() {
     var sh = ss.getSheetByName("Items");
     if (!sh) {
       sh = ss.insertSheet("Items");
-      sh.appendRow(["item", "barcode", "added"]);
+      sh.appendRow(["item", "barcode", "added", "barcode (scan this)"]);
+      formatItemsBarcodeColumn(sh);
+    } else {
+      var lastCol = sh.getLastColumn() || 1;
+      var existing = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+      if (existing.indexOf("barcode (scan this)") === -1) {
+        sh.getRange(1, existing.length + 1).setValue("barcode (scan this)");
+        formatItemsBarcodeColumn(sh);
+        // Backfill column D for every row that already has a numeric code
+        // in column B, so items numbered before this column existed get
+        // their scannable barcode too, not just ones created from now on.
+        var data = sh.getDataRange().getValues();
+        for (var i = 1; i < data.length; i++) {
+          var code = String(data[i][1] || "");
+          if (/^\d+$/.test(code)) sh.getRange(i + 1, 4).setValue(code);
+        }
+      }
     }
+    // Re-applied every time (cheap, and idempotent) rather than only when
+    // the column is first created, so a sizing tweak here takes effect on
+    // an already-existing sheet the next time anything barcode-related
+    // runs — no separate one-off fix needed on the sheet itself.
+    formatItemsBarcodeColumn(sh);
     return sh;
+  }
+
+  // Sized so the barcode (bars + the number printed underneath, from the
+  // font itself) fits inside its cell without getting clipped or forcing
+  // the row to wrap — a wide-enough column, a tall-enough row, and the
+  // barcode centered within both.
+  function formatItemsBarcodeColumn(sh) {
+    sh.getRange(2, 4, 998, 1)
+      .setFontFamily("Libre Barcode 128 Text")
+      .setFontSize(30)
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle")
+      .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    sh.setColumnWidth(4, 240);
+    sh.setRowHeights(2, 998, 70);
   }
 
   // The next item number to hand out. Backed by a durable counter
@@ -1882,12 +1923,13 @@
         if (/^\d+$/.test(existingCode)) return { created: false, code: existingCode };
         var migratedCode = nextItemCode(sh);
         sh.getRange(i + 1, 2).setValue(migratedCode);
+        sh.getRange(i + 1, 4).setValue(migratedCode);
         return { created: false, migrated: true, code: migratedCode };
       }
     }
     var code = nextItemCode(sh);
     var addedDate = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
-    sh.appendRow([itemName, code, addedDate]);
+    sh.appendRow([itemName, code, addedDate, code]);
     return { created: true, code: code };
   }
 
@@ -1908,6 +1950,7 @@
         code = nextItemCode(sh);
         sh.getRange(i + 1, 2).setValue(code);
       }
+      sh.getRange(i + 1, 4).setValue(code); // keep the visual barcode column in sync too
       seen[code] = true;
     }
     var fresh = sh.getDataRange().getValues();
