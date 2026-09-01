@@ -1016,6 +1016,7 @@
 
   let activeScanner = null;
   async function stopScanner() {
+    clearScanStallTimer();
     if (!activeScanner) return;
     const s = activeScanner;
     activeScanner = null;
@@ -1046,6 +1047,22 @@
     qtyInput.select();
   }
 
+  let scanStallTimer = null;
+  function clearScanStallTimer() {
+    if (scanStallTimer) { clearTimeout(scanStallTimer); scanStallTimer = null; }
+  }
+  // If nothing has scanned after a few seconds, swap in a troubleshooting
+  // tip rather than leaving "Point the camera at a barcode." up forever —
+  // this is the most common spot people get stuck, especially scanning a
+  // barcode off a phone/computer screen instead of a printed label.
+  function armScanStallTip() {
+    clearScanStallTimer();
+    scanStallTimer = setTimeout(() => {
+      const el = document.getElementById("scan-status");
+      if (el) el.textContent = "Still nothing? Scanning off a screen is harder than a printed label — try raising the screen's brightness, filling the box with just the barcode, holding steady about 10-15cm away, and tilting slightly to kill glare. A printed label (Costs → Print labels) scans much more reliably.";
+    }, 6000);
+  }
+
   async function openScanModal() {
     const root = openModal(`
       <h3>Scan barcode</h3>
@@ -1056,10 +1073,11 @@
         <button type="button" class="btn btn-ghost" id="modal-cancel">Cancel</button>
       </div>
     `);
-    const finish = async () => { await stopScanner(); closeModal(); };
+    const finish = async () => { clearScanStallTimer(); await stopScanner(); closeModal(); };
     root.querySelector("#modal-cancel").addEventListener("click", finish);
     root.querySelector(".modal-backdrop").addEventListener("click", (e) => { if (e.target.classList.contains("modal-backdrop")) finish(); });
     root.querySelector("#scan-type-instead").addEventListener("click", async () => {
+      clearScanStallTimer();
       await stopScanner();
       closeModal();
       const code = await promptModal("Barcode number", "", { title: "Enter barcode manually", inputmode: "numeric" });
@@ -1076,15 +1094,33 @@
     }
     if (!document.getElementById("scan-reader")) return; // modal was closed/replaced while the library loaded
 
-    activeScanner = new Html5Qrcode("scan-reader", { formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128], verbose: false });
+    // useBarCodeDetectorIfSupported: lets the browser's own native
+    // BarcodeDetector do the decoding when available (most current Android
+    // Chrome), falling back to the bundled ZXing decoder elsewhere — the
+    // native one tends to cope better with a barcode glowing on a screen.
+    activeScanner = new Html5Qrcode("scan-reader", {
+      formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
+      useBarCodeDetectorIfSupported: true,
+      verbose: false,
+    });
     let handled = false;
     try {
       await activeScanner.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 260, height: 130 } },
+        {
+          fps: 10,
+          // A generous, viewfinder-relative box instead of a small fixed
+          // one — easier to fill with a barcode shown on a phone/monitor
+          // held at an arm's length, and more forgiving of screen size.
+          qrbox: (viewfinderWidth, viewfinderHeight) => {
+            const edge = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.85);
+            return { width: Math.max(edge, 260), height: Math.max(Math.floor(edge * 0.55), 140) };
+          },
+        },
         async (decodedText) => {
           if (handled) return;
           handled = true;
+          clearScanStallTimer();
           await stopScanner();
           closeModal();
           applyScannedCode(decodedText);
@@ -1093,6 +1129,7 @@
       );
       statusEl = document.getElementById("scan-status");
       if (statusEl) statusEl.textContent = "Point the camera at a barcode.";
+      armScanStallTip();
     } catch (err) {
       statusEl = document.getElementById("scan-status");
       if (statusEl) statusEl.textContent = "Couldn't access the camera — check camera permission, or type the code instead.";
