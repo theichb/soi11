@@ -142,6 +142,11 @@
     width: 100%; background: var(--ink); border: 1px solid var(--edge); color: var(--bone);
     padding: 12px; border-radius: 3px; font-family: 'Karla', sans-serif; font-size: 16px; resize: vertical;
   }
+  /* Camera preview for the barcode scanner — html5-qrcode injects its own
+     <video>/<canvas> into #scan-reader, this just gives it a sized, rounded
+     frame to sit in and keeps it from overflowing the modal. */
+  #scan-reader { width: 100%; min-height: 220px; border-radius: 8px; overflow: hidden; background: #000; }
+  #scan-reader video { width: 100%; display: block; }
 
   .section-title { display: flex; justify-content: space-between; align-items: baseline; margin: 22px 0 10px; }
   .section-title h2 { font-family: 'Zilla Slab', serif; font-size: 17px; font-weight: 700; margin: 0; }
@@ -177,7 +182,7 @@
      through previous entries one day at a time instead of opening the
      native date picker every time. */
   .date-nav { display: flex; align-items: center; gap: 8px; }
-  .date-nav input[type="date"] { flex: 1; min-width: 0; }
+  .date-nav input[type="date"], .date-nav input[type="text"] { flex: 1; min-width: 0; }
   .date-nav .action-btn { flex-shrink: 0; font-size: 18px; }
   /* Prev/next month arrows on the Costs "Recent" list — same layout as the
      day slider above, but flanking a text label instead of a date input. */
@@ -369,7 +374,10 @@
 
       <div class="field">
         <label for="item-input">Item</label>
-        <input type="text" id="item-input" placeholder="e.g. Belt" autocomplete="off" />
+        <div class="date-nav">
+          <input type="text" id="item-input" placeholder="e.g. Belt" autocomplete="off" />
+          <button type="button" id="scan-barcode-btn" class="action-btn no-print" title="Scan barcode" aria-label="Scan barcode">&#128247;</button>
+        </div>
       </div>
 
       <div class="field-row">
@@ -975,6 +983,123 @@
   }
 
   document.getElementById("manage-quick-picks").addEventListener("click", manageQuickPicks);
+
+  // ---------- barcode scan (Log Sales) ----------
+  // Scans an item's printed barcode (its own number, from the Items tab)
+  // with the phone's camera and fills the Item field with whatever name
+  // that number maps to — the same fill-in-item-and-cost outcome as
+  // tapping a Quick Pick chip, just via the camera instead of a tap. Sell
+  // price and quantity are always left for manual entry.
+  //
+  // Decoding a live camera feed is a genuinely different (and much harder)
+  // problem than generating a barcode was — there's no reliable way to
+  // hand-roll that offline the way code128Encode() was, so this is the one
+  // place in the app that reaches out to a CDN for a real, well-tested
+  // scanning library (html5-qrcode) rather than staying fully self
+  // contained. It's only fetched the first time someone actually taps
+  // "Scan barcode", not on every page load, and the browser's own HTTP
+  // cache holds onto it after that — same as any other outside resource,
+  // it needs a connection the very first time.
+  let html5QrcodePromise = null;
+  function loadHtml5Qrcode() {
+    if (window.Html5Qrcode) return Promise.resolve();
+    if (html5QrcodePromise) return html5QrcodePromise;
+    html5QrcodePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js";
+      script.onload = () => resolve();
+      script.onerror = () => { html5QrcodePromise = null; reject(new Error("Couldn't load the scanner — check your connection and try again.")); };
+      document.head.appendChild(script);
+    });
+    return html5QrcodePromise;
+  }
+
+  let activeScanner = null;
+  async function stopScanner() {
+    if (!activeScanner) return;
+    const s = activeScanner;
+    activeScanner = null;
+    try { await s.stop(); } catch (err) { /* already stopped/never started */ }
+    try { s.clear(); } catch (err) {}
+  }
+  // Stop the camera the instant the tab is backgrounded (screen lock, app
+  // switch) rather than leaving it running — matters for battery/privacy
+  // even though the modal itself blocks the rest of the UI while open.
+  document.addEventListener("visibilitychange", () => { if (document.hidden) stopScanner(); });
+
+  // Shared by both the live camera scan and its "type the code instead"
+  // fallback — looks the scanned/typed number up against the Items list
+  // synced from the sheet and, on a match, fills Item (and Cost, if that
+  // item has a fixed buying price) exactly like picking a Quick Pick chip.
+  function applyScannedCode(code) {
+    const clean = String(code || "").trim();
+    const match = items.find((it) => it.barcode === clean);
+    if (!match) { showToast(`No item found for barcode "${clean}"`); return; }
+    document.getElementById("item-input").value = match.item;
+    document.querySelectorAll("#quick-pick-chips .item-chip").forEach((c) => c.classList.remove("on"));
+    costAutoFilled = true;
+    document.getElementById("cost-input").value = "";
+    applyFixedCost();
+    showToast(`Scanned: ${match.item}`);
+    const qtyInput = document.getElementById("qty-input");
+    qtyInput.focus();
+    qtyInput.select();
+  }
+
+  async function openScanModal() {
+    const root = openModal(`
+      <h3>Scan barcode</h3>
+      <div id="scan-status" class="field-hint" style="margin:0 0 10px;">Starting camera&hellip;</div>
+      <div id="scan-reader"></div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-ghost" id="scan-type-instead">Type code instead</button>
+        <button type="button" class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      </div>
+    `);
+    const finish = async () => { await stopScanner(); closeModal(); };
+    root.querySelector("#modal-cancel").addEventListener("click", finish);
+    root.querySelector(".modal-backdrop").addEventListener("click", (e) => { if (e.target.classList.contains("modal-backdrop")) finish(); });
+    root.querySelector("#scan-type-instead").addEventListener("click", async () => {
+      await stopScanner();
+      closeModal();
+      const code = await promptModal("Barcode number", "", { title: "Enter barcode manually", inputmode: "numeric" });
+      if (code && code.trim()) applyScannedCode(code);
+    });
+
+    let statusEl = document.getElementById("scan-status");
+    try {
+      await loadHtml5Qrcode();
+    } catch (err) {
+      statusEl = document.getElementById("scan-status"); // modal may have re-rendered while loading
+      if (statusEl) statusEl.textContent = err.message;
+      return;
+    }
+    if (!document.getElementById("scan-reader")) return; // modal was closed/replaced while the library loaded
+
+    activeScanner = new Html5Qrcode("scan-reader", { formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128], verbose: false });
+    let handled = false;
+    try {
+      await activeScanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 130 } },
+        async (decodedText) => {
+          if (handled) return;
+          handled = true;
+          await stopScanner();
+          closeModal();
+          applyScannedCode(decodedText);
+        },
+        () => {} // per-frame "nothing decoded yet" callback — scanning just continues
+      );
+      statusEl = document.getElementById("scan-status");
+      if (statusEl) statusEl.textContent = "Point the camera at a barcode.";
+    } catch (err) {
+      statusEl = document.getElementById("scan-status");
+      if (statusEl) statusEl.textContent = "Couldn't access the camera — check camera permission, or type the code instead.";
+    }
+  }
+
+  document.getElementById("scan-barcode-btn").addEventListener("click", openScanModal);
 
   function addEntry() {
     const item = document.getElementById("item-input").value.trim();
@@ -2893,6 +3018,7 @@ function doGet(e) {
 
   // ---------- tabs ----------
   async function switchTab(which) {
+    if (which !== "entry") stopScanner();
     if (LOCKED_TABS.includes(which) && !(await unlockTab())) return;
     document.getElementById("view-entry").style.display = which === "entry" ? "" : "none";
     document.getElementById("view-dashboard").style.display = which === "dashboard" ? "" : "none";
