@@ -2022,12 +2022,15 @@
           if (/^\d+$/.test(code)) sh.getRange(i + 1, 4).setValue(code);
         }
       }
+      // NOTE: formatting used to be re-applied here on every single call —
+      // that meant every restock/sale touching an item re-styled a 998-row
+      // range (font, alignment, wrap, column width, row heights) even
+      // though nothing about the formatting had changed. That's one of the
+      // slower things you can ask Sheets to do, and it was happening on
+      // every write. Only the two branches above (new sheet / column just
+      // added) actually change the formatting, so only they need to re-run
+      // it now.
     }
-    // Re-applied every time (cheap, and idempotent) rather than only when
-    // the column is first created, so a sizing tweak here takes effect on
-    // an already-existing sheet the next time anything barcode-related
-    // runs — no separate one-off fix needed on the sheet itself.
-    formatItemsBarcodeColumn(sh);
     return sh;
   }
 
@@ -2510,11 +2513,21 @@ function doGet(e) {
     // Merged columns (date, and salesman on Sales) read back "" for every
     // row but the first in each run — resolve them before mapping rows so
     // the app sees every row's real value, not a blank continuation cell.
+    // Forward-filled in memory from the already-fetched data array rather
+    // than re-reading the column from the sheet — that second read used to
+    // cost one extra Sheets API round-trip per sheet, every single time the
+    // app opened, on top of the getDataRange() call two lines up that
+    // already has the exact same values.
     mergeColumnsFor(sheetName).forEach(function (h) {
       var colIdx = headers.indexOf(h);
       if (colIdx > -1) {
-        var resolved = readColumnResolvingMerges(sh, colIdx + 1, data.length - 1);
-        for (var r = 1; r < data.length; r++) data[r][colIdx] = resolved[r - 1];
+        var last = "";
+        for (var r = 1; r < data.length; r++) {
+          var v = data[r][colIdx];
+          if (v === "" || v === null) v = last;
+          else last = v;
+          data[r][colIdx] = v;
+        }
       }
     });
     var rows = data.slice(1).map(function (row) {
