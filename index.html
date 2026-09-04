@@ -142,12 +142,6 @@
     width: 100%; background: var(--ink); border: 1px solid var(--edge); color: var(--bone);
     padding: 12px; border-radius: 3px; font-family: 'Karla', sans-serif; font-size: 16px; resize: vertical;
   }
-  /* Camera preview for the barcode scanner — html5-qrcode injects its own
-     <video>/<canvas> into #scan-reader, this just gives it a sized, rounded
-     frame to sit in and keeps it from overflowing the modal. */
-  #scan-reader { width: 100%; min-height: 220px; border-radius: 8px; overflow: hidden; background: #000; }
-  #scan-reader video { width: 100%; display: block; }
-
   .section-title { display: flex; justify-content: space-between; align-items: baseline; margin: 22px 0 10px; }
   .section-title h2 { font-family: 'Zilla Slab', serif; font-size: 17px; font-weight: 700; margin: 0; }
 
@@ -305,26 +299,6 @@
     }
   }
 
-  /* Barcode labels — printed via #barcode-print-area (see printAllBarcodes()),
-     kept off-screen the rest of the time and swapped in only at print time. */
-  .print-only { display: none; }
-  @media print {
-    .print-only { display: block !important; }
-    /* Printing labels shows ONLY the label sheet — everything else in the
-       app (whichever tab happens to be open underneath) is hidden for
-       that one print, then restored via the "afterprint" handler. */
-    body.printing-labels > *:not(#barcode-print-area) { display: none !important; }
-  }
-  .barcode-item-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-  .barcode-label { background: #fff; border: 1px solid var(--edge); border-radius: 4px; padding: 8px; }
-  .barcode-label svg { width: 100%; height: auto; display: block; }
-  /* Barcode content is now the item's number, not its name, so the name is
-     printed above the bars as its own line — otherwise a label would just
-     show a number with nothing to identify which product it belongs to. */
-  .barcode-item-name { font-size: 12px; font-weight: 600; text-align: center; margin-bottom: 4px; word-break: break-word; color: #222; }
-  .barcode-empty { color: var(--muted); font-size: 13px; padding: 4px 0; }
-  .barcode-print-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; padding: 16px; }
-  .barcode-print-grid .barcode-label { page-break-inside: avoid; break-inside: avoid; }
 </style>
 </head>
 <body class="theme-light">
@@ -374,10 +348,7 @@
 
       <div class="field">
         <label for="item-input">Item</label>
-        <div class="date-nav">
-          <input type="text" id="item-input" placeholder="e.g. Belt" autocomplete="off" />
-          <button type="button" id="scan-barcode-btn" class="action-btn no-print" title="Scan barcode" aria-label="Scan barcode">&#128247;</button>
-        </div>
+        <input type="text" id="item-input" placeholder="e.g. Belt" autocomplete="off" />
       </div>
 
       <div class="field-row">
@@ -523,23 +494,6 @@
       <div class="subtotal" id="cost-list-subtotal" style="display:none;"></div>
     </div>
 
-    <!-- Restocking only — barcodes are created off restocked items, so this
-         sits right under that list rather than tucked away on Sync. -->
-    <div class="card" id="item-barcode-section" style="display:none;">
-      <div class="section-title" style="margin-top:0;">
-        <h2>Item barcodes</h2>
-        <button type="button" class="action-btn no-print" id="print-barcodes-btn" title="Print all labels" aria-label="Print all barcode labels" style="font-size:16px;">&#9113;</button>
-      </div>
-      <p class="intro" style="margin:0 0 10px;">Created automatically the first time each item is restocked — each item gets its own unique number (starting at 1001), and that's what the barcode encodes. Saved to the "Items" tab in your Google Sheet.</p>
-      <div id="item-barcode-list"></div>
-      <div class="btn-row single no-print" id="fix-duplicates-row" style="display:none;">
-        <button type="button" class="btn btn-secondary" id="fix-duplicates-btn">Fix duplicate barcode numbers</button>
-      </div>
-      <div class="btn-row single no-print" id="backfill-barcodes-row" style="display:none;">
-        <button type="button" class="btn btn-secondary" id="backfill-barcodes-btn">Generate for existing items</button>
-      </div>
-    </div>
-
     <div class="grand-total" id="cost-total"></div>
   </div>
 
@@ -578,10 +532,6 @@
   </div>
 
 </div>
-
-<!-- Populated by printAllBarcodes() right before window.print() — hidden
-     on screen, and the only thing left visible on the printed page. -->
-<div id="barcode-print-area" class="print-only"></div>
 
 <div class="toast" id="toast"></div>
 <div id="modal-root" style="display:none;"></div>
@@ -664,12 +614,6 @@
   let restocks = [];
   let repairs = [];
   let expenses = [];
-  // Item → barcode master list, loaded from the "Items" tab and appended to
-  // automatically by ensureItemBarcode() the first time a new item is
-  // restocked. Unlike the four arrays above this isn't per-record — it's
-  // just names, so it's fine for it to lag a few seconds behind on a second
-  // device rather than needing the same live-reload machinery.
-  let items = [];
   let dataLoaded = false;
   // Runs once, right after the first live load — jumps the Log Sales date
   // to whichever day most recently has entries, so opening the app never
@@ -983,160 +927,6 @@
   }
 
   document.getElementById("manage-quick-picks").addEventListener("click", manageQuickPicks);
-
-  // ---------- barcode scan (Log Sales) ----------
-  // Scans an item's printed barcode (its own number, from the Items tab)
-  // with the phone's camera and fills the Item field with whatever name
-  // that number maps to — the same fill-in-item-and-cost outcome as
-  // tapping a Quick Pick chip, just via the camera instead of a tap. Sell
-  // price and quantity are always left for manual entry.
-  //
-  // Decoding a live camera feed is a genuinely different (and much harder)
-  // problem than generating a barcode was — there's no reliable way to
-  // hand-roll that offline the way code128Encode() was, so this is the one
-  // place in the app that reaches out to a CDN for a real, well-tested
-  // scanning library (html5-qrcode) rather than staying fully self
-  // contained. It's only fetched the first time someone actually taps
-  // "Scan barcode", not on every page load, and the browser's own HTTP
-  // cache holds onto it after that — same as any other outside resource,
-  // it needs a connection the very first time.
-  let html5QrcodePromise = null;
-  function loadHtml5Qrcode() {
-    if (window.Html5Qrcode) return Promise.resolve();
-    if (html5QrcodePromise) return html5QrcodePromise;
-    html5QrcodePromise = new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js";
-      script.onload = () => resolve();
-      script.onerror = () => { html5QrcodePromise = null; reject(new Error("Couldn't load the scanner — check your connection and try again.")); };
-      document.head.appendChild(script);
-    });
-    return html5QrcodePromise;
-  }
-
-  let activeScanner = null;
-  async function stopScanner() {
-    clearScanStallTimer();
-    if (!activeScanner) return;
-    const s = activeScanner;
-    activeScanner = null;
-    try { await s.stop(); } catch (err) { /* already stopped/never started */ }
-    try { s.clear(); } catch (err) {}
-  }
-  // Stop the camera the instant the tab is backgrounded (screen lock, app
-  // switch) rather than leaving it running — matters for battery/privacy
-  // even though the modal itself blocks the rest of the UI while open.
-  document.addEventListener("visibilitychange", () => { if (document.hidden) stopScanner(); });
-
-  // Shared by both the live camera scan and its "type the code instead"
-  // fallback — looks the scanned/typed number up against the Items list
-  // synced from the sheet and, on a match, fills Item (and Cost, if that
-  // item has a fixed buying price) exactly like picking a Quick Pick chip.
-  function applyScannedCode(code) {
-    const clean = String(code || "").trim();
-    const match = items.find((it) => it.barcode === clean);
-    if (!match) { showToast(`No item found for barcode "${clean}"`); return; }
-    document.getElementById("item-input").value = match.item;
-    document.querySelectorAll("#quick-pick-chips .item-chip").forEach((c) => c.classList.remove("on"));
-    costAutoFilled = true;
-    document.getElementById("cost-input").value = "";
-    applyFixedCost();
-    showToast(`Scanned: ${match.item}`);
-    const qtyInput = document.getElementById("qty-input");
-    qtyInput.focus();
-    qtyInput.select();
-  }
-
-  let scanStallTimer = null;
-  function clearScanStallTimer() {
-    if (scanStallTimer) { clearTimeout(scanStallTimer); scanStallTimer = null; }
-  }
-  // If nothing has scanned after a few seconds, swap in a troubleshooting
-  // tip rather than leaving "Point the camera at a barcode." up forever —
-  // this is the most common spot people get stuck, especially scanning a
-  // barcode off a phone/computer screen instead of a printed label.
-  function armScanStallTip() {
-    clearScanStallTimer();
-    scanStallTimer = setTimeout(() => {
-      const el = document.getElementById("scan-status");
-      if (el) el.textContent = "Still nothing? Scanning off a screen is harder than a printed label — try raising the screen's brightness, filling the box with just the barcode, holding steady about 10-15cm away, and tilting slightly to kill glare. A printed label (Costs → Print labels) scans much more reliably.";
-    }, 6000);
-  }
-
-  async function openScanModal() {
-    const root = openModal(`
-      <h3>Scan barcode</h3>
-      <div id="scan-status" class="field-hint" style="margin:0 0 10px;">Starting camera&hellip;</div>
-      <div id="scan-reader"></div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-ghost" id="scan-type-instead">Type code instead</button>
-        <button type="button" class="btn btn-ghost" id="modal-cancel">Cancel</button>
-      </div>
-    `);
-    const finish = async () => { clearScanStallTimer(); await stopScanner(); closeModal(); };
-    root.querySelector("#modal-cancel").addEventListener("click", finish);
-    root.querySelector(".modal-backdrop").addEventListener("click", (e) => { if (e.target.classList.contains("modal-backdrop")) finish(); });
-    root.querySelector("#scan-type-instead").addEventListener("click", async () => {
-      clearScanStallTimer();
-      await stopScanner();
-      closeModal();
-      const code = await promptModal("Barcode number", "", { title: "Enter barcode manually", inputmode: "numeric" });
-      if (code && code.trim()) applyScannedCode(code);
-    });
-
-    let statusEl = document.getElementById("scan-status");
-    try {
-      await loadHtml5Qrcode();
-    } catch (err) {
-      statusEl = document.getElementById("scan-status"); // modal may have re-rendered while loading
-      if (statusEl) statusEl.textContent = err.message;
-      return;
-    }
-    if (!document.getElementById("scan-reader")) return; // modal was closed/replaced while the library loaded
-
-    // useBarCodeDetectorIfSupported: lets the browser's own native
-    // BarcodeDetector do the decoding when available (most current Android
-    // Chrome), falling back to the bundled ZXing decoder elsewhere — the
-    // native one tends to cope better with a barcode glowing on a screen.
-    activeScanner = new Html5Qrcode("scan-reader", {
-      formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128],
-      useBarCodeDetectorIfSupported: true,
-      verbose: false,
-    });
-    let handled = false;
-    try {
-      await activeScanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          // A generous, viewfinder-relative box instead of a small fixed
-          // one — easier to fill with a barcode shown on a phone/monitor
-          // held at an arm's length, and more forgiving of screen size.
-          qrbox: (viewfinderWidth, viewfinderHeight) => {
-            const edge = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.85);
-            return { width: Math.max(edge, 260), height: Math.max(Math.floor(edge * 0.55), 140) };
-          },
-        },
-        async (decodedText) => {
-          if (handled) return;
-          handled = true;
-          clearScanStallTimer();
-          await stopScanner();
-          closeModal();
-          applyScannedCode(decodedText);
-        },
-        () => {} // per-frame "nothing decoded yet" callback — scanning just continues
-      );
-      statusEl = document.getElementById("scan-status");
-      if (statusEl) statusEl.textContent = "Point the camera at a barcode.";
-      armScanStallTip();
-    } catch (err) {
-      statusEl = document.getElementById("scan-status");
-      if (statusEl) statusEl.textContent = "Couldn't access the camera — check camera permission, or type the code instead.";
-    }
-  }
-
-  document.getElementById("scan-barcode-btn").addEventListener("click", openScanModal);
 
   function addEntry() {
     const item = document.getElementById("item-input").value.trim();
@@ -1655,9 +1445,6 @@
     // for restocking (buying stock) — a repair or a bill isn't one of
     // those named items, so hide it for those two types.
     document.getElementById("cost-quick-pick-chips").style.display = costType === "restocking" ? "" : "none";
-    // Barcodes only ever come from restocked items — no point showing the
-    // list under Repairs or Expenses.
-    document.getElementById("item-barcode-section").style.display = costType === "restocking" ? "" : "none";
   }
 
   // Restocking only: qty × price per unit fills Amount automatically, the
@@ -1707,7 +1494,6 @@
     showToast("Added");
 
     if (activeSyncUrl()) syncCost(costType, record);
-    if (activeSyncUrl() && costType === "restocking") ensureItemBarcode(name);
   }
 
   async function syncCost(type, record) {
@@ -1870,7 +1656,6 @@
       <div class="big mono">${money(totalRestock + totalRepair + totalExpense)}</div>
       <div class="rows">restocking <span>${money(totalRestock)}</span><br/>repairs &amp; usage <span>${money(totalRepair)}</span><br/>expenses <span>${money(totalExpense)}</span></div>
     `;
-    if (costType === "restocking") renderItemBarcodes();
   }
 
   document.querySelectorAll("#cost-type-chips .item-chip").forEach((chip) => {
@@ -1990,151 +1775,10 @@
     });
   }
 
-  // "Items" is a master list, not a per-transaction record — one row per
-  // item name ever restocked, not one per restock. Barcode holds each
-  // item's own unique number (starting at 1001), assigned here so numbering
-  // stays centralized even with multiple devices restocking at once.
-  // Column D repeats that same number, but formatted with "Libre Barcode
-  // 128 Text" — a free Google Font that renders plain digits as an actual
-  // scannable Code 128 barcode (with the number printed underneath) purely
-  // through the font itself. No image, no external service to be down or
-  // slow — the cell just holds ordinary text, styled.
-  function getItemsSheet() {
-    var sh = ss.getSheetByName("Items");
-    if (!sh) {
-      sh = ss.insertSheet("Items");
-      sh.appendRow(["item", "barcode", "added", "barcode (scan this)"]);
-      formatItemsBarcodeColumn(sh);
-    } else {
-      var lastCol = sh.getLastColumn() || 1;
-      var existing = sh.getRange(1, 1, 1, lastCol).getValues()[0];
-      if (existing.indexOf("barcode (scan this)") === -1) {
-        sh.getRange(1, existing.length + 1).setValue("barcode (scan this)");
-        formatItemsBarcodeColumn(sh);
-        // Backfill column D for every row that already has a numeric code
-        // in column B, so items numbered before this column existed get
-        // their scannable barcode too, not just ones created from now on.
-        var data = sh.getDataRange().getValues();
-        for (var i = 1; i < data.length; i++) {
-          var code = String(data[i][1] || "");
-          if (/^\d+$/.test(code)) sh.getRange(i + 1, 4).setValue(code);
-        }
-      }
-      // NOTE: formatting used to be re-applied here on every single call —
-      // that meant every restock/sale touching an item re-styled a 998-row
-      // range (font, alignment, wrap, column width, row heights) even
-      // though nothing about the formatting had changed. That's one of the
-      // slower things you can ask Sheets to do, and it was happening on
-      // every write. Only the two branches above (new sheet / column just
-      // added) actually change the formatting, so only they need to re-run
-      // it now.
-    }
-    return sh;
-  }
-
-  // Sized so the barcode (bars + the number printed underneath, from the
-  // font itself) fits inside its cell without getting clipped or forcing
-  // the row to wrap — a wide-enough column, a tall-enough row, and the
-  // barcode centered within both.
-  function formatItemsBarcodeColumn(sh) {
-    sh.getRange(2, 4, 998, 1)
-      .setFontFamily("Libre Barcode 128 Text")
-      .setFontSize(30)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
-    sh.setColumnWidth(4, 240);
-    sh.setRowHeights(2, 998, 70);
-  }
-
-  // The next item number to hand out. Backed by a durable counter
-  // (PropertiesService, not just a cell in the sheet) so it can never hand
-  // out the same number twice even if two restocks fire close together —
-  // scanning the sheet for "the current highest number" and adding one
-  // turned out not to be reliable enough on its own (multiple items ended
-  // up with the same number in practice), so the counter is now the source
-  // of truth and the sheet scan below is only a floor under it, in case a
-  // number was ever entered by hand or from before this counter existed.
-  function nextItemCode(sh) {
-    var props = PropertiesService.getScriptProperties();
-    var last = parseInt(props.getProperty("lastItemCode") || "1000", 10);
-    var data = sh.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++) {
-      var v = String(data[i][1] || "");
-      if (/^\d+$/.test(v)) {
-        var n = parseInt(v, 10);
-        if (n > last) last = n;
-      }
-    }
-    var next = last + 1;
-    props.setProperty("lastItemCode", String(next));
-    return String(next);
-  }
-
-  // Idempotent: a second restock of the same item finds its existing row
-  // and — if it's already numbered — does nothing, so this is always safe
-  // to call from doPost without checking first. A row left over from
-  // before barcodes were numbered (barcode column still holding the item's
-  // name) gets a number assigned to it right here instead of being treated
-  // as already done, so every item ends up on the same numbering system.
-  function ensureItemBarcode(itemName) {
-    var sh = getItemsSheet();
-    var data = sh.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++) {
-      if (String(data[i][0]) === String(itemName)) {
-        var existingCode = String(data[i][1] || "");
-        if (/^\d+$/.test(existingCode)) return { created: false, code: existingCode };
-        var migratedCode = nextItemCode(sh);
-        sh.getRange(i + 1, 2).setValue(migratedCode);
-        sh.getRange(i + 1, 4).setValue(migratedCode);
-        return { created: false, migrated: true, code: migratedCode };
-      }
-    }
-    var code = nextItemCode(sh);
-    var addedDate = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
-    sh.appendRow([itemName, code, addedDate, code]);
-    return { created: true, code: code };
-  }
-
-  // One-time repair for exactly the state a numbering bug could leave
-  // behind: two or more items sharing the same number. Walks the sheet top
-  // to bottom, keeps the first row holding any given number as-is, and
-  // reassigns a fresh number to every row after it that repeats a number
-  // already seen (or never had a valid number to begin with). Safe to run
-  // any time, including when nothing's actually wrong — rows that are
-  // already unique are left untouched.
-  function repairItemCodes() {
-    var sh = getItemsSheet();
-    var data = sh.getDataRange().getValues();
-    var seen = {};
-    for (var i = 1; i < data.length; i++) {
-      var code = String(data[i][1] || "").trim();
-      if (!/^\d+$/.test(code) || seen[code]) {
-        code = nextItemCode(sh);
-        sh.getRange(i + 1, 2).setValue(code);
-      }
-      sh.getRange(i + 1, 4).setValue(code); // keep the visual barcode column in sync too
-      seen[code] = true;
-    }
-    var fresh = sh.getDataRange().getValues();
-    var out = [];
-    for (var j = 1; j < fresh.length; j++) {
-      if (fresh[j][0]) out.push({ item: String(fresh[j][0]), barcode: String(fresh[j][1]) });
-    }
-    return out;
-  }
-
-  var itemResult = null;
-  var repairedItems = null;
-
   if (body.action === "full_sync") {
     fullSync({ sales: body.sales, restocks: body.restocks, repairs: body.repairs, expenses: body.expenses });
   } else if (body.action === "delete") {
     deleteRow(sheetNames[body.type], body.record.id);
-  } else if (body.action === "ensure_item") {
-    itemResult = ensureItemBarcode(body.item);
-  } else if (body.action === "repair_items") {
-    repairedItems = repairItemCodes();
   } else {
     upsertRow(sheetNames[body.type], body.record);
   }
@@ -2144,12 +1788,6 @@
   }
 
   var responseBody = { ok: true };
-  if (itemResult) {
-    responseBody.created = itemResult.created;
-    responseBody.code = itemResult.code;
-    if (itemResult.migrated) responseBody.migrated = true;
-  }
-  if (repairedItems) responseBody.items = repairedItems;
   return ContentService.createTextOutput(JSON.stringify(responseBody))
     .setMimeType(ContentService.MimeType.JSON);
   } finally {
@@ -2401,17 +2039,6 @@ function doGet(e) {
     out[sheetDefs[sheetName]] = rows;
   });
 
-  // Items has its own shape (item/barcode/added, no id column), so it's
-  // read separately rather than through the id-filtered loop above.
-  out.items = [];
-  var itemsSh = ss.getSheetByName("Items");
-  if (itemsSh) {
-    var idata = itemsSh.getDataRange().getValues();
-    for (var ii = 1; ii < idata.length; ii++) {
-      if (idata[ii][0]) out.items.push({ item: String(idata[ii][0]), barcode: String(idata[ii][1] || idata[ii][0]) });
-    }
-  }
-
   return ContentService.createTextOutput(JSON.stringify(out))
     .setMimeType(ContentService.MimeType.JSON);
 }`;
@@ -2521,13 +2148,11 @@ function doGet(e) {
       restocks = keepUnconfirmed(liveRestocks, restocks);
       repairs = keepUnconfirmed(liveRepairs, repairs);
       expenses = keepUnconfirmed(liveExpenses, expenses);
-      items = (data.items || []).map((r) => ({ item: String(r.item), barcode: String(r.barcode || r.item) }));
 
       dataLoaded = true;
       jumpToLastEntryDate();
       renderEntryList();
       renderCostList();
-      renderItemBarcodes();
       updateBannerSyncState();
       if (showMessages) showToast("Loaded from Google Sheets");
       return true;
@@ -2579,234 +2204,6 @@ function doGet(e) {
       el.innerHTML = `<strong>Live sync</strong> — every sale, restock, repair, and expense saves straight to your Google Sheet.`;
     }
   }
-
-  // ---------- item barcodes ----------
-  // Code 128 (Subset B), implemented by hand so barcode generation works
-  // fully offline inside the PWA — nothing to fetch from a CDN. A barcode's
-  // content is each item's own unique number (assigned server-side,
-  // starting at 1001), not its name — the name is printed as a label above
-  // the bars instead, since scanning now hands back a number rather than
-  // text. The pattern table below was cross-checked against a real decoder
-  // (zbar) before shipping, and covers plain digits with room to spare.
-  const CODE128_PATTERNS = [
-    "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312",
-    "132212", "221213", "221312", "231212", "112232", "122132", "122231", "113222",
-    "123122", "123221", "223211", "221132", "221231", "213212", "223112", "312131",
-    "311222", "321122", "321221", "312212", "322112", "322211", "212123", "212321",
-    "232121", "111323", "131123", "131321", "112313", "132113", "132311", "211313",
-    "231113", "231311", "112133", "112331", "132131", "113123", "113321", "133121",
-    "313121", "211331", "231131", "213113", "213311", "213131", "311123", "311321",
-    "331121", "312113", "312311", "332111", "314111", "221411", "431111", "111224",
-    "111422", "121124", "121421", "141122", "141221", "112214", "112412", "122114",
-    "122411", "142112", "142211", "241211", "221114", "413111", "241112", "134111",
-    "111242", "121142", "121241", "114212", "124112", "124211", "411212", "421112",
-    "421211", "212141", "214121", "412121", "111143", "111341", "131141", "114113",
-    "114311", "411113", "411311", "113141", "114131", "311141", "411131", "211412",
-    "211214", "211232", "2331112",
-  ];
-  const CODE128_START_B = 104;
-  const CODE128_STOP = 106;
-
-  // Throws if `text` has a character Code Set B can't carry (outside
-  // printable ASCII 32-126) — callers show that message instead of a
-  // barcode rather than silently rendering something unscannable.
-  function code128Encode(text) {
-    for (const ch of text) {
-      const code = ch.charCodeAt(0);
-      if (code < 32 || code > 126) throw new Error(`Can't make a barcode for "${text}" — "${ch}" isn't supported.`);
-    }
-    const values = [...text].map((ch) => ch.charCodeAt(0) - 32);
-    let checksum = CODE128_START_B;
-    values.forEach((v, i) => { checksum += v * (i + 1); });
-    checksum %= 103;
-    const symbolValues = [CODE128_START_B, ...values, checksum, CODE128_STOP];
-    return symbolValues.map((v) => CODE128_PATTERNS[v]).join("");
-  }
-
-  function renderBarcodeSVG(text) {
-    let pattern;
-    try { pattern = code128Encode(text); }
-    catch (err) { return `<div class="barcode-empty">${esc(err.message)}</div>`; }
-    const moduleWidth = 2, barHeight = 50, quiet = 10, labelHeight = 16;
-    const widths = pattern.split("").map(Number);
-    const totalModules = widths.reduce((a, b) => a + b, 0) + quiet * 2;
-    const totalWidthPx = totalModules * moduleWidth;
-    let xModules = quiet, bar = true, rects = "";
-    widths.forEach((w) => {
-      if (bar) rects += `<rect x="${xModules * moduleWidth}" y="0" width="${w * moduleWidth}" height="${barHeight}"/>`;
-      xModules += w;
-      bar = !bar;
-    });
-    return `<svg viewBox="0 0 ${totalWidthPx} ${barHeight + labelHeight}" xmlns="http://www.w3.org/2000/svg">
-      <rect x="0" y="0" width="${totalWidthPx}" height="${barHeight}" fill="#fff"/>
-      <g fill="#000">${rects}</g>
-      <text x="${totalWidthPx / 2}" y="${barHeight + 12}" font-family="'Space Mono', ui-monospace, monospace" font-size="11" text-anchor="middle" fill="#000">${esc(text)}</text>
-    </svg>`;
-  }
-
-  // A barcode field only counts as "properly coded" once it's the numeric
-  // item number — anything else is either untouched or a leftover from
-  // before barcodes were numbered (when this column held the item's name).
-  function isItemCode(v) { return /^\d+$/.test(String(v || "").trim()); }
-
-  // Item names already restocked (from history) that don't yet have a
-  // number-based barcode — either never created at all, or created back
-  // when barcodes were just the item's own name. What "Generate for
-  // existing items" below has to catch up on.
-  function itemsNeedingBarcode() {
-    const seen = new Set();
-    const pending = [];
-    restocks.forEach((r) => {
-      const name = (r.name || "").trim();
-      if (!name || seen.has(name)) return;
-      seen.add(name);
-      const existing = items.find((it) => it.item === name);
-      if (!existing || !isItemCode(existing.barcode)) pending.push(name);
-    });
-    return pending;
-  }
-
-  function barcodeLabelHTML(it) {
-    return `<div class="barcode-label"><div class="barcode-item-name">${esc(it.item)}</div>${renderBarcodeSVG(it.barcode)}</div>`;
-  }
-
-  // True if two or more items share the same numeric barcode — which
-  // shouldn't happen, but a numbering bug once let it (see
-  // fixDuplicateBarcodes() below), so this is checked on every render
-  // rather than assumed away.
-  function hasDuplicateBarcodes() {
-    const seen = new Set();
-    for (const it of items) {
-      if (!isItemCode(it.barcode)) continue;
-      if (seen.has(it.barcode)) return true;
-      seen.add(it.barcode);
-    }
-    return false;
-  }
-
-  function renderItemBarcodes() {
-    const el = document.getElementById("item-barcode-list");
-    if (el) {
-      if (!items.length) {
-        el.innerHTML = `<div class="barcode-empty">No item barcodes yet — one's created automatically the first time you restock a new item.</div>`;
-      } else {
-        el.innerHTML = `<div class="barcode-item-list">` + items.map(barcodeLabelHTML).join("") + `</div>`;
-      }
-    }
-    const dupRow = document.getElementById("fix-duplicates-row");
-    if (dupRow) dupRow.style.display = hasDuplicateBarcodes() ? "" : "none";
-    const row = document.getElementById("backfill-barcodes-row");
-    if (row) row.style.display = itemsNeedingBarcode().length ? "" : "none";
-  }
-
-  // Repairs exactly the failure a numbering bug left behind: two or more
-  // items sharing the same number. Delegates to the sheet side
-  // (repair_items), which keeps the first item holding any given number
-  // and reassigns fresh numbers to the rest, then hands back the full,
-  // now-unique list so this device's copy matches it exactly.
-  async function fixDuplicateBarcodes() {
-    if (!activeSyncUrl()) { showToast("Connect to Google Sheets first"); return; }
-    const btn = document.getElementById("fix-duplicates-btn");
-    if (btn) { btn.disabled = true; btn.textContent = "Fixing…"; }
-    try {
-      const res = await fetch(activeSyncUrl(), {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action: "repair_items" }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.ok && Array.isArray(data.items)) {
-          items = data.items.map((r) => ({ item: String(r.item), barcode: String(r.barcode) }));
-          renderItemBarcodes();
-          showToast("Barcode numbers fixed — reprint any labels you'd already printed");
-        } else {
-          showToast("Couldn't reach the sheet — try again");
-        }
-      } else {
-        showToast("Couldn't reach the sheet — try again");
-      }
-    } catch (err) {
-      showToast("Couldn't reach the sheet — try again");
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = "Fix duplicate barcode numbers"; }
-    }
-  }
-  document.getElementById("fix-duplicates-btn").addEventListener("click", fixDuplicateBarcodes);
-
-  // Swaps the label sheet into #barcode-print-area, hides the rest of the
-  // page for that one print (see the .printing-labels rule), then restores
-  // it once the print dialog closes (or is cancelled) via "afterprint".
-  function printAllBarcodes() {
-    if (!items.length) { showToast("No item barcodes yet"); return; }
-    const area = document.getElementById("barcode-print-area");
-    area.innerHTML = `<div class="barcode-print-grid">` + items.map(barcodeLabelHTML).join("") + `</div>`;
-    document.body.classList.add("printing-labels");
-    window.print();
-  }
-  window.addEventListener("afterprint", () => document.body.classList.remove("printing-labels"));
-  document.getElementById("print-barcodes-btn").addEventListener("click", printAllBarcodes);
-
-  // Fire-and-forget: called right after a restocking entry is added. Asks
-  // the sheet for this item's number — creating a fresh one in the "Items"
-  // tab if it isn't there yet, or handing back the number it already has.
-  // The Apps Script side is the source of truth (it also self-heals any
-  // pre-numbering row that still has its name in the barcode column), so
-  // this always defers to whatever code comes back rather than inventing
-  // one locally. opts.silent skips the per-item toast — used by
-  // backfillItemBarcodes() below, which shows one summary toast instead.
-  async function ensureItemBarcode(name, opts = {}) {
-    if (!name || !activeSyncUrl()) return;
-    const existing = items.find((it) => it.item === name);
-    if (existing && isItemCode(existing.barcode)) return; // already properly numbered
-    try {
-      const res = await fetch(activeSyncUrl(), {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action: "ensure_item", item: name }),
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data && data.ok && data.code) {
-        const idx = items.findIndex((it) => it.item === name);
-        if (idx >= 0) items[idx] = { item: name, barcode: String(data.code) };
-        else items.push({ item: name, barcode: String(data.code) });
-        renderItemBarcodes();
-        if (!opts.silent) {
-          showToast(data.migrated ? `"${name}" renumbered — #${data.code}` : `Barcode #${data.code} created for "${name}"`);
-        }
-      }
-    } catch (err) {
-      // Silent — a nice-to-have alongside the cost record's own sync, which
-      // already surfaces its own failure/retry state for the record itself.
-    }
-  }
-
-  // Catches up anything not yet on the number system: items restocked
-  // before this feature existed, and items whose barcode still holds their
-  // old name-based value from before barcodes were numbered. Sequential on
-  // purpose: each request takes the same server-side lock as every other
-  // sync call, so firing them all at once would just make them queue up
-  // anyway, and numbering needs each one assigned before the next reads
-  // "what's the highest number so far".
-  async function backfillItemBarcodes() {
-    if (!activeSyncUrl()) { showToast("Connect to Google Sheets first"); return; }
-    const pending = itemsNeedingBarcode();
-    if (!pending.length) { showToast("Every restocked item already has a barcode"); return; }
-    const btn = document.getElementById("backfill-barcodes-btn");
-    if (btn) { btn.disabled = true; btn.textContent = `Creating ${pending.length}…`; }
-    let done = 0;
-    for (const name of pending) {
-      const before = items.find((it) => it.item === name)?.barcode;
-      await ensureItemBarcode(name, { silent: true });
-      const after = items.find((it) => it.item === name)?.barcode;
-      if (after && after !== before) done++;
-    }
-    if (btn) { btn.disabled = false; btn.textContent = "Generate for existing items"; }
-    renderItemBarcodes();
-    showToast(done ? `Created/renumbered ${done} barcode${done === 1 ? "" : "s"}` : "Couldn't reach the sheet — try again");
-  }
-  document.getElementById("backfill-barcodes-btn").addEventListener("click", backfillItemBarcodes);
 
   function renderSyncTab() {
     document.getElementById("script-code").textContent = APPS_SCRIPT_SOURCE;
@@ -2918,7 +2315,6 @@ function doGet(e) {
 
   // ---------- tabs ----------
   async function switchTab(which) {
-    if (which !== "entry") stopScanner();
     if (LOCKED_TABS.includes(which) && !(await unlockTab())) return;
     document.getElementById("view-entry").style.display = which === "entry" ? "" : "none";
     document.getElementById("view-dashboard").style.display = which === "dashboard" ? "" : "none";
